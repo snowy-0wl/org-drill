@@ -2699,16 +2699,17 @@ Session finished. Press a key to continue..."
            (oref session due-tomorrow-count)
            ))
 
-    (org-drill-interaction-mode 1)
-    (unwind-protect
-        (progn
-          (message "%s" prompt)
-          (recursive-edit))
-      (org-drill-interaction-mode -1))
+    (let ((org-drill-current-session session))
+      (org-drill-interaction-mode 1)
+      (unwind-protect
+          (progn
+            (message "%s" prompt)
+            (recursive-edit))
+        (org-drill-interaction-mode -1)))
 
     (if (and qualities
              (< pass-percent (- 100 org-drill-forgetting-index)))
-        (progn
+        (let ((org-drill-current-session session))
           (org-drill-interaction-mode 1)
           (unwind-protect
               (progn
@@ -2733,7 +2734,7 @@ order to make items appear more frequently over time."
                                    (length (oref session failed-entries))
                                    (length (oref session again-entries)))))))
                 (recursive-edit))
-            (org-drill-interaction-mode -1))))))
+            (org-drill-interaction-mode -1)))))))
 
 (defun org-drill-free-markers (session markers)
   "MARKERS is a list of markers, all of which will be freed (set to

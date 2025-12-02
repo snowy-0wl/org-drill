@@ -2734,7 +2734,7 @@ order to make items appear more frequently over time."
                                    (length (oref session failed-entries))
                                    (length (oref session again-entries)))))))
                 (recursive-edit))
-            (org-drill-interaction-mode -1)))))))
+            (org-drill-interaction-mode -1))))))
 
 (defun org-drill-free-markers (session markers)
   "MARKERS is a list of markers, all of which will be freed (set to

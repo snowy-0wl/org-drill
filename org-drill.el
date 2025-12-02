@@ -1400,7 +1400,8 @@ of QUALITY."
 
 (defun org-drill-reschedule (session)
   "Returns quality rating (0-5), or nil if the user quit."
-  (let ((ch nil)
+  (let ((org-drill-current-session session)
+        (ch nil)
         (input nil)
         (next-review-dates (org-drill-hypothetical-next-review-dates))
         (typed-answer-statement (if (oref session typed-answer)
@@ -1412,15 +1413,12 @@ of QUALITY."
                             org-drill--edit-key
                             org-drill--tags-key
                             org-drill--quit-key)))
-    (save-excursion
-      (while (not (memq ch (list org-drill--quit-key
-                                 org-drill--edit-key
-                                 7          ; C-g
-                                 ?0 ?1 ?2 ?3 ?4 ?5)))
-        (run-hooks 'org-drill-display-answer-hook)
-        (setq input (org-drill--read-key-sequence
-                     (if (eq ch org-drill--help-key)
-                         (format "0-2 Means you have forgotten the item.
+    (org-drill-interaction-mode 1)
+    (unwind-protect
+        (progn
+          (run-hooks 'org-drill-display-answer-hook)
+          (message (if (eq ch org-drill--help-key)
+                       (format "0-2 Means you have forgotten the item.
 3-5 Means you have remembered the item.
 
 0 - Completely forgot.
@@ -1431,64 +1429,46 @@ of QUALITY."
 5 - You remembered the item really easily. (+%s days)
 
 %sHow well did you do? %s"
-                                 (round (nth 3 next-review-dates))
-                                 (round (nth 4 next-review-dates))
-                                 (round (nth 5 next-review-dates))
-                                 typed-answer-statement
-                                 key-prompt)
-                       (format "%sHow well did you do? %s"
-                               typed-answer-statement key-prompt))))
-        (cond
-         ((stringp input)
-          (setq ch (elt input 0)))
-         ((and (vectorp input) (symbolp (elt input 0)))
-          (cl-case (elt input 0)
-            (up (ignore-errors (forward-line -1)))
-            (down (ignore-errors (forward-line 1)))
-            (left (ignore-errors (backward-char)))
-            (right (ignore-errors (forward-char)))
-            (prior (ignore-errors (scroll-down))) ; pgup
-            (next (ignore-errors (scroll-up)))))  ; pgdn
-         ((and (vectorp input) (listp (elt input 0))
-               (eventp (elt input 0)))
-          (cl-case (car (elt input 0))
-            (wheel-up (ignore-errors (mwheel-scroll (elt input 0))))
-            (wheel-down (ignore-errors (mwheel-scroll (elt input 0)))))))
-        (if (eql ch org-drill--tags-key)
-            (org-set-tags-command))))
-    (cond
-     ((and (>= ch ?0) (<= ch ?5))
-      (let ((quality (- ch ?0))
-            (failures (org-drill-entry-failure-count)))
-        (unless (oref session cram-mode)
-          (save-excursion
-            (let ((quality (if (org-drill--entry-lapsed-p session) 2 quality)))
-              (org-drill-smart-reschedule quality
-                                          (nth quality next-review-dates))))
-          (push quality (oref session qualities))
-          (cond
-           ((<= quality org-drill-failure-quality)
-            (when org-drill-leech-failure-threshold
-              ;;(setq failures (if failures (string-to-number failures) 0))
-              ;; (org-set-property "DRILL_FAILURE_COUNT"
-              ;;                   (format "%d" (1+ failures)))
-              (if (> (1+ failures) org-drill-leech-failure-threshold)
-                  (org-toggle-tag "leech" 'on))))
-           (t
-            (let ((scheduled-time (org-get-scheduled-time (point))))
-              (when scheduled-time
-                (message "Next review in %d days"
-                         (- (time-to-days scheduled-time)
-                            (time-to-days (current-time))))
-                (sit-for 0.5)))))
-          (org-set-property "DRILL_LAST_QUALITY" (format "%d" quality))
-          (org-set-property "DRILL_LAST_REVIEWED"
-                            (org-drill-time-to-inactive-org-timestamp (current-time))))
-        quality))
-     ((= ch org-drill--edit-key)
-      'edit)
-     (t
-      nil))))
+                               (round (nth 3 next-review-dates))
+                               (round (nth 4 next-review-dates))
+                               (round (nth 5 next-review-dates))
+                               typed-answer-statement
+                               key-prompt)
+                     (format "%sHow well did you do? %s"
+                             typed-answer-statement key-prompt)))
+          (recursive-edit))
+      (org-drill-interaction-mode -1))
+    (let ((result (oref session exit-kind)))
+      (cond
+       ((and (numberp result) (>= result 0) (<= result 5))
+        (let ((quality result)
+              (failures (org-drill-entry-failure-count)))
+          (unless (oref session cram-mode)
+            (save-excursion
+              (let ((quality (if (org-drill--entry-lapsed-p session) 2 quality)))
+                (org-drill-smart-reschedule quality
+                                            (nth quality next-review-dates))))
+            (push quality (oref session qualities))
+            (cond
+             ((<= quality org-drill-failure-quality)
+              (when org-drill-leech-failure-threshold
+                (if (> (1+ failures) org-drill-leech-failure-threshold)
+                    (org-toggle-tag "leech" 'on))))
+             (t
+              (let ((scheduled-time (org-get-scheduled-time (point))))
+                (when scheduled-time
+                  (message "Next review in %d days"
+                           (- (time-to-days scheduled-time)
+                              (time-to-days (current-time))))
+                  (sit-for 0.5)))))
+            (org-set-property "DRILL_LAST_QUALITY" (format "%d" quality))
+            (org-set-property "DRILL_LAST_REVIEWED"
+                              (org-drill-time-to-inactive-org-timestamp (current-time))))
+          quality))
+       ((eq result 'edit)
+        'edit)
+       (t
+        nil)))))
 
 ;; (defun org-drill-hide-all-subheadings-except (heading-list)
 ;;   "Returns a list containing the position of each immediate subheading of
@@ -1611,7 +1591,8 @@ Arguments:
 
 PROMPT: A string that overrides the standard prompt.
 "
-  (let* ((item-start-time (current-time))
+  (let* ((org-drill-current-session session)
+         (item-start-time (current-time))
          (input nil)
          (ch nil)
          (prompt
@@ -1632,24 +1613,20 @@ You seem to be having a lot of trouble memorising this item.
 Consider reformulating the item to make it easier to remember.\n"
                                        'face '(:foreground "red"))
                            full-prompt)))
-    (while (memq ch '(nil org-drill--tags-key))
-      (setq ch nil)
-      (while (not (input-pending-p))
-        (let ((elapsed (time-subtract (current-time) item-start-time)))
-          (message (concat (if (>= (time-to-seconds elapsed) (* 60 60))
-                               "++:++ "
-                             (format-time-string "%M:%S " elapsed))
-                           full-prompt))
-          (sit-for 1)))
-      (setq input (org-drill--read-key-sequence nil))
-      (if (stringp input) (setq ch (elt input 0)))
-      (if (eql ch org-drill--tags-key)
-          (org-set-tags-command)))
-    (cond
-     ((eql ch org-drill--quit-key) nil)
-     ((eql ch org-drill--edit-key) 'edit)
-     ((eql ch org-drill--skip-key) 'skip)
-     (t t))))
+    (org-drill-presentation-timer-cancel)
+    (setq org-drill-presentation-timer
+          (run-with-idle-timer 1 t
+                               #'org-drill-presentation-minibuffer-timer-function
+                               item-start-time full-prompt)
+          org-drill-presentation-timer-calls 0)
+    (org-drill-interaction-mode 1)
+    (unwind-protect
+        (progn
+          (message "%s" full-prompt)
+          (recursive-edit))
+      (org-drill-interaction-mode -1)
+      (org-drill-presentation-timer-cancel))
+    (oref session exit-kind)))
 
 (defvar org-drill-presentation-timer nil
   "Timer for buffer-entry of answers")
@@ -1719,6 +1696,69 @@ Consider reformulating the item to make it easier to remember.\n"
   (interactive)
   (oset org-drill-current-session exit-kind 'tags)
   (org-drill-response-complete))
+
+(defvar org-drill-interaction-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") 'org-drill-quit)
+    (define-key map (kbd "?") 'org-drill-help)
+    (define-key map (kbd "e") 'org-drill-edit)
+    (define-key map (kbd "t") 'org-drill-tags)
+    (define-key map (kbd "s") 'org-drill-skip)
+    (define-key map (kbd "SPC") 'org-drill-show-answer)
+    (define-key map (kbd "RET") 'org-drill-show-answer)
+    (define-key map (kbd "0") 'org-drill-rate-0)
+    (define-key map (kbd "1") 'org-drill-rate-1)
+    (define-key map (kbd "2") 'org-drill-rate-2)
+    (define-key map (kbd "3") 'org-drill-rate-3)
+    (define-key map (kbd "4") 'org-drill-rate-4)
+    (define-key map (kbd "5") 'org-drill-rate-5)
+    map)
+  "Keymap for `org-drill-interaction-mode`.")
+
+(define-minor-mode org-drill-interaction-mode
+  "Minor mode for org-drill interaction."
+  :lighter " Drill"
+  :keymap org-drill-interaction-mode-map)
+
+(defun org-drill-quit ()
+  (interactive)
+  (oset org-drill-current-session exit-kind 'quit)
+  (exit-recursive-edit))
+
+(defun org-drill-help ()
+  (interactive)
+  (message "0-5: Rate, SPC/RET: Show Answer, e: Edit, t: Tags, s: Skip, q: Quit")
+  (sit-for 2))
+
+(defun org-drill-edit ()
+  (interactive)
+  (oset org-drill-current-session exit-kind 'edit)
+  (exit-recursive-edit))
+
+(defun org-drill-tags ()
+  (interactive)
+  (org-set-tags-command))
+
+(defun org-drill-skip ()
+  (interactive)
+  (oset org-drill-current-session exit-kind 'skip)
+  (exit-recursive-edit))
+
+(defun org-drill-show-answer ()
+  (interactive)
+  (oset org-drill-current-session exit-kind t)
+  (exit-recursive-edit))
+
+(defun org-drill-rate-0 () (interactive) (org-drill-rate 0))
+(defun org-drill-rate-1 () (interactive) (org-drill-rate 1))
+(defun org-drill-rate-2 () (interactive) (org-drill-rate 2))
+(defun org-drill-rate-3 () (interactive) (org-drill-rate 3))
+(defun org-drill-rate-4 () (interactive) (org-drill-rate 4))
+(defun org-drill-rate-5 () (interactive) (org-drill-rate 5))
+
+(defun org-drill-rate (quality)
+  (oset org-drill-current-session exit-kind quality)
+  (exit-recursive-edit))
 
 (defun org-drill-response-get-buffer-create ()
   "Create a response buffer."
@@ -2659,16 +2699,22 @@ Session finished. Press a key to continue..."
            (oref session due-tomorrow-count)
            ))
 
-    (while (not (input-pending-p))
-      (message "%s" prompt)
-      (sit-for 0.5))
-    (read-char-exclusive)
+    (org-drill-interaction-mode 1)
+    (unwind-protect
+        (progn
+          (message "%s" prompt)
+          (recursive-edit))
+      (org-drill-interaction-mode -1))
 
     (if (and qualities
              (< pass-percent (- 100 org-drill-forgetting-index)))
-        (read-char-exclusive
-         (format
-          "%s
+        (progn
+          (org-drill-interaction-mode 1)
+          (unwind-protect
+              (progn
+                (message
+                 (format
+                  "%s
 You failed %d%% of the items you reviewed during this session.
 %d (%d%%) of all items scanned were overdue.
 
@@ -2676,13 +2722,18 @@ Are you keeping up with your items, and reviewing them
 when they are scheduled? If so, you may want to consider
 lowering the value of `org-drill-learn-fraction' slightly in
 order to make items appear more frequently over time."
-          (propertize "WARNING!" 'face 'org-warning)
-          (- 100 pass-percent)
-          (oref session overdue-entry-count)
-          (round (* 100 (oref session overdue-entry-count))
-                 (+ (oref session dormant-entry-count)
-                    (oref session due-entry-count))))
-         ))))
+                  (propertize "WARNING!" 'face 'org-warning)
+                  (- 100 pass-percent)
+                  (length (oref session overdue-entries))
+                  (round (* 100 (length (oref session overdue-entries)))
+                         (max 1 (+ (length (oref session overdue-entries))
+                                   (length (oref session young-mature-entries))
+                                   (length (oref session old-mature-entries))
+                                   (length (oref session new-entries))
+                                   (length (oref session failed-entries))
+                                   (length (oref session again-entries)))))))
+                (recursive-edit))
+            (org-drill-interaction-mode -1))))))
 
 (defun org-drill-free-markers (session markers)
   "MARKERS is a list of markers, all of which will be freed (set to
@@ -2901,10 +2952,16 @@ resuming a suspended session, this parameter is ignored."
   (let ((majorv (cl-first (mapcar 'string-to-number (split-string (org-release) "[.]")))))
     (if (and (< majorv 8)
              (not (string-match-p "universal prefix argument" (documentation 'org-schedule))))
-        (read-char-exclusive
-         (format "Warning: org-drill requires org mode 7.9.3f or newer. Scheduling of failed cards will not
+        (progn
+          (org-drill-interaction-mode 1)
+          (unwind-protect
+              (progn
+                (message
+                 (format "Warning: org-drill requires org mode 7.9.3f or newer. Scheduling of failed cards will not
 work correctly with older versions of org mode. Your org mode version (%s) appears to be older than
-7.9.3f. Please consider installing a more recent version of org mode." (org-release)))))
+7.9.3f. Please consider installing a more recent version of org mode." (org-release)))
+                (recursive-edit))
+            (org-drill-interaction-mode -1)))))
   (let ((session
          (if resume-p
              org-drill-last-session
